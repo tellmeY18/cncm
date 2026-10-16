@@ -1,0 +1,18 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: care-db
+  namespace: care
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.6
+  bootstrap:
+    initdb:
+      database: care
+      owner: care
+      secret: {name: care-db-auth}
+  storage:
+    size: 10Gi
+  resources:
+    requests: {cpu: 200m, memory: 256Mi}
+    limits: {memory: 1Gi}

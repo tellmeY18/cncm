@@ -1,0 +1,91 @@
+# Bootstrap CNCM only. Create cncm-bootstrap Secret before starting the pod.
+# Replace the image with the CNCM image you build and make available to the node.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cncm-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cncm
+  namespace: cncm-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cncm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: cncm
+    namespace: cncm-system
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cncm-data
+  namespace: cncm-system
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: cncm}
+  template:
+    metadata:
+      labels: {app: cncm}
+    spec:
+      serviceAccountName: cncm
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: cncm
+          image: cncm:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: CNCM_ADDR, value: '0.0.0.0:8080'}
+            - {name: CNCM_ORIGIN, value: 'http://localhost:8080'}
+            - {name: CNCM_DATA_DIR, value: /data}
+            - name: CNCM_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: cncm-bootstrap, key: token}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: cncm-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  selector: {app: cncm}
+  ports: [{port: 8080, targetPort: 8080}]

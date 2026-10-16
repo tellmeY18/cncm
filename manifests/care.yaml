@@ -1,0 +1,193 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-api
+  namespace: care
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: care-api}
+  template:
+    metadata:
+      labels: {app: care-api}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: api
+          image: care-backend:unconfigured
+          command: [/bin/bash, /app/start.sh]
+          envFrom:
+            - configMapRef: {name: care-config}
+            - secretRef: {name: care-secrets}
+          ports: [{containerPort: 9000}]
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          startupProbe:
+            httpGet: {path: /ping/, port: 9000}
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            httpGet: {path: /ping/, port: 9000}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: care-api
+  namespace: care
+spec:
+  selector: {app: care-api}
+  ports: [{port: 9000, targetPort: 9000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-worker
+  namespace: care
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: care-worker}
+  template:
+    metadata:
+      labels: {app: care-worker}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: worker
+          image: care-backend:unconfigured
+          command: [/bin/bash, /app/celery_worker.sh]
+          envFrom:
+            - configMapRef: {name: care-config}
+            - secretRef: {name: care-secrets}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 2Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-beat
+  namespace: care
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: care-beat}
+  template:
+    metadata:
+      labels: {app: care-beat}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: beat
+          image: care-backend:unconfigured
+          # Initialization is explicitly owned by the migration Job, not startup.
+          command: [/bin/bash, -ec]
+          args:
+            - |
+              printf celery-beat > /tmp/container-role
+              touch /tmp/healthy
+              exec celery --app=config.celery_app beat --loglevel=info
+          envFrom:
+            - configMapRef: {name: care-config}
+            - secretRef: {name: care-secrets}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-frontend
+  namespace: care
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: care-frontend}
+  template:
+    metadata:
+      labels: {app: care-frontend}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: frontend
+          image: care-frontend:unconfigured
+          ports: [{containerPort: 80}]
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          readinessProbe:
+            httpGet: {path: /, port: 80}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: care-frontend
+  namespace: care
+spec:
+  selector: {app: care-frontend}
+  ports: [{port: 80, targetPort: 80}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: care-proxy
+  namespace: care
+data:
+  Caddyfile: |
+    :8080 {
+      handle /api/* {
+        reverse_proxy care-api:9000
+      }
+      @backend path /static/* /ping/* /health/*
+      handle @backend {
+        reverse_proxy care-api:9000
+      }
+      @files path /patient-bucket/* /facility-bucket/*
+      handle @files {
+        reverse_proxy silo:9000
+      }
+      handle {
+        reverse_proxy care-frontend:80
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: care-proxy
+  namespace: care
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: care-proxy}
+  template:
+    metadata:
+      labels: {app: care-proxy}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: proxy
+          image: caddy:2.10.2-alpine
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          readinessProbe:
+            httpGet: {path: /ping/, port: 8080}
+          volumeMounts: [{name: config, mountPath: /etc/caddy}]
+      volumes:
+        - name: config
+          configMap: {name: care-proxy}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: care
+  namespace: care
+spec:
+  selector: {app: care-proxy}
+  ports: [{port: 80, targetPort: 8080}]

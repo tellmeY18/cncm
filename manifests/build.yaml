@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cncm-build
+  namespace: care
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels: {app: cncm-build}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      initContainers:
+        - name: source
+          image: alpine/git:2.49.1
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              git init /workspace/src
+              git -C /workspace/src remote add origin "$SOURCE_REPOSITORY"
+              git -C /workspace/src fetch --depth=1 origin "$SOURCE_COMMIT"
+              git -C /workspace/src checkout --detach FETCH_HEAD
+              test "$(git -C /workspace/src rev-parse HEAD)" = "$SOURCE_COMMIT"
+              if [ "$COMPONENT" = frontend ]; then
+                printf '%s\n' 'REACT_CARE_API_URL=' 'REACT_DISABLE_PATIENT_LOGIN=true' 'REACT_RECAPTCHA_SITE_KEY=' > /workspace/src/.env.local
+              fi
+          env: []
+          volumeMounts: [{name: workspace, mountPath: /workspace}]
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+      containers:
+        - name: build
+          image: moby/buildkit:v0.25.1
+          securityContext: {privileged: true}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              buildctl-daemonless.sh build --frontend dockerfile.v0 \
+                --local context=/workspace/src --local dockerfile=/workspace/src \
+                --opt "filename=$DOCKERFILE" \
+                --opt "build-arg:APP_VERSION=$SOURCE_COMMIT" \
+                --output "type=image,name=$PUSH_IMAGE,push=true,registry.insecure=true" \
+                --metadata-file /workspace/metadata.json
+              digest=$(sed -n 's/.*"containerimage.digest": "\(sha256:[a-f0-9]*\)".*/\1/p' /workspace/metadata.json)
+              test -n "$digest"
+              printf '%s' "$digest" > /dev/termination-log
+          env: []
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: '2', memory: 5Gi}
+          volumeMounts: [{name: workspace, mountPath: /workspace}]
+      volumes: [{name: workspace, emptyDir: {}}]

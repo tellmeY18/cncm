@@ -1,0 +1,169 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: care
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: registry-data
+  namespace: care
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: care
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: registry}
+  template:
+    metadata:
+      labels: {app: registry}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: registry
+          image: registry:3.0.0
+          ports: [{containerPort: 5000}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /v2/, port: 5000}
+          volumeMounts: [{name: data, mountPath: /var/lib/registry}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: registry-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: care
+spec:
+  type: NodePort
+  selector: {app: registry}
+  ports: [{port: 5000, targetPort: 5000, nodePort: 30500}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: silo-data
+  namespace: care
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 10Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: silo
+  namespace: care
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: silo}
+  template:
+    metadata:
+      labels: {app: silo}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: silo
+          image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              silo server /data --console-address ':9001' &
+              pid=$!
+              trap 'kill -TERM "$pid"; wait "$pid"' TERM INT
+              for attempt in $(seq 1 120); do
+                if curl -sf http://localhost:9000/minio/health/ready >/dev/null; then break; fi
+                sleep 2
+              done
+              mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+              mc mb --ignore-existing local/patient-bucket local/facility-bucket
+              mc anonymous set none local/patient-bucket
+              mc anonymous set download local/facility-bucket
+              touch /tmp/buckets-ready
+              wait "$pid"
+          envFrom: [{secretRef: {name: silo-credentials}}]
+          ports: [{containerPort: 9000}]
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          readinessProbe:
+            exec:
+              command: [/bin/sh, -ec, 'test -f /tmp/buckets-ready && curl -sf http://localhost:9000/minio/health/ready >/dev/null']
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: silo-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: silo
+  namespace: care
+spec:
+  selector: {app: silo}
+  ports: [{port: 9000, targetPort: 9000}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: care
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: care
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: redis
+          image: redis:8.2.2-alpine
+          args: [--appendonly, 'yes']
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          readinessProbe:
+            exec: {command: [redis-cli, ping]}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: redis-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: care
+spec:
+  selector: {app: redis}
+  ports: [{port: 6379, targetPort: 6379}]

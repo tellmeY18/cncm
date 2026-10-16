@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: care-initialize
+  namespace: care
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels: {app: care-initialize}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: initialize
+          image: care-backend:unconfigured
+          command: [/bin/bash, -ec]
+          args:
+            - |
+              python manage.py migrate --noinput
+              python manage.py sync_permissions_roles
+              python manage.py sync_valueset
+              python manage.py createsuperuser --noinput
+          envFrom:
+            - configMapRef: {name: care-config}
+            - secretRef: {name: care-secrets}
+            - secretRef: {name: care-initial-admin}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 2Gi}
