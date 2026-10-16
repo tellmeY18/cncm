@@ -4,6 +4,12 @@ This guide installs the **CNCM management portal** as a Kubernetes workload usin
 plain YAML. It needs no Helm, Kustomize, ingress controller, or cloud-specific API.
 The easiest initial access is a localhost port-forward.
 
+For the shortest dashboard-based path, use [the Kite quickstart](KITE.md).
+Once the image publishing workflow has succeeded and the GHCR package is public,
+the shipped manifest pulls `ghcr.io/tellmey18/cncm:edge` directly. You can skip
+step 2 below and use the manifest unchanged. Building your own image remains an
+option; the steps below document that path too.
+
 The manager uses standard Kubernetes resources, but **the current CARE installer
 requires exactly one Ready Linux amd64/arm64 node**. It also requires a default
 StorageClass, privileged BuildKit Jobs, and node runtime access to its local HTTP
@@ -24,9 +30,11 @@ Kubernetes distribution; live cluster acceptance is still pending.
   the supplied Dockerfile and publish an image to a registry your node can pull.
 - Git, kubectl, and OpenSSL on your workstation.
 
-There is **no published CNCM image supplied by this repository yet**. Build your
-own image below. Publishing the CNCM image is separate from the in-cluster
-registry that CNCM later creates for CARE images.
+The [publishing workflow](https://github.com/tellmeY18/cncm/actions/workflows/publish.yaml)
+publishes Linux AMD64/ARM64 manager images after checks pass. Check that a build
+has completed before using its tag. Publishing the CNCM image is separate from
+the in-cluster registry that CNCM later creates for CARE images. Docker/Buildx is
+only needed if you choose to build your own manager image.
 
 ## 1. Get the source and select the target
 
@@ -100,7 +108,7 @@ through your usual Kubernetes Secret management tool.
 ## 4. Install the manager
 
 Open `manifests/cncm.yaml` in your editor and replace the Deployment's
-`image: cncm:0.1.0` with the exact image reference you pushed in step 2 (the value
+`image: ghcr.io/tellmey18/cncm:edge` with the exact image reference you pushed in step 2 (the value
 of `CNCM_IMAGE`). Set the literal reference, not `$CNCM_IMAGE`: Kubernetes does not
 expand shell variables inside YAML. Then apply the bootstrap manifest:
 
@@ -111,7 +119,8 @@ kubectl --context "$KUBE_CONTEXT" -n cncm-system \
   rollout status deployment/cncm --timeout=180s
 ```
 
-If using the imported local image option, keep `image: cncm:0.1.0`.
+If using the imported local image option, set `image: cncm:0.1.0` and
+`imagePullPolicy: IfNotPresent`.
 If you edited storage, image-pull credentials, or other fields in a local copy,
 use that file in place of `manifests/cncm.yaml`.
 

@@ -14,6 +14,10 @@ and publish the manager image, configure its bootstrap token, apply the plain
 YAML, and open the portal. The guide includes registry setup, platform constraints,
 and troubleshooting for the single-node CARE workflow.
 
+**Using Kite?** Follow [the Kite quickstart](KITE.md): apply the manager manifest,
+create its bootstrap Secret, and open the portal. GitHub Actions builds AMD64/ARM64
+images at `ghcr.io/tellmey18/cncm:edge` and `sha-<full-commit>` after checks pass.
+
 ## What this cut implements
 
 - Bootstrap-token-protected administrator setup; local password authentication,
