@@ -1,5 +1,7 @@
 # CNCM · Cloud Native CARE Manager
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
 A CARE-specific management portal for one machine, one Kubernetes cluster, and
 one CARE installation. Go + embedded React, SQLite, and repository-owned plain
 Kubernetes YAML. Inspired by Kite; styled after [CareUI](https://careui.ohc.network/).
@@ -241,3 +243,17 @@ end-to-end clinical acceptance has been performed as part of this implementation
 Local folders, USB disks, Google Drive and other consumer destinations are planned
 through Containers Anywhere. No backward compatibility with `care_clinic` is
 planned. Kite stays in the appliance for expert Kubernetes administration.
+
+## License
+
+Copyright (C) 2026 CNCM contributors.
+
+CNCM is licensed under the **GNU Affero General Public License version 3 only**
+(`AGPL-3.0-only`). See [LICENSE](LICENSE) for the full terms. CNCM is provided
+without warranty, including any implied warranty of merchantability or fitness
+for a particular purpose.
+
+Source code is available at [tellmeY18/cncm](https://github.com/tellmeY18/cncm).
+Modified versions offered over a network must provide their corresponding source
+to users as required by section 13. Third-party dependencies retain their own
+licenses.
