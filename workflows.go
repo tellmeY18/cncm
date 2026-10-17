@@ -523,6 +523,11 @@ func (a *App) install(ctx context.Context, id string, req operationRequest, s Se
 	}); err != nil {
 		return err
 	}
+	if ing := careIngress(s.CareURL); ing != nil {
+		if err = a.kube.apply(ctx, ing); err != nil {
+			return err
+		}
+	}
 	for _, name := range careDeployments {
 		if err = a.stage(id, "Waiting for "+name); err != nil {
 			return err
@@ -590,4 +595,27 @@ func (a *App) control(ctx context.Context, id, kind string) error {
 		}
 	}
 	return nil
+}
+
+// careIngress publishes CARE through an Ingress when the browser address is a
+// .local or .localhost name, as used by the Containers Anywhere gateway. For
+// other addresses (port-forward, external ingress) it returns nil.
+func careIngress(careURL string) *unstructured.Unstructured {
+	u, err := url.Parse(careURL)
+	if err != nil {
+		return nil
+	}
+	host := u.Hostname()
+	if !strings.HasSuffix(host, ".local") && !strings.HasSuffix(host, ".localhost") {
+		return nil
+	}
+	o := object("Ingress", "care", map[string]any{"spec": map[string]any{
+		"ingressClassName": "containers-anywhere",
+		"rules": []any{map[string]any{"host": host, "http": map[string]any{"paths": []any{map[string]any{
+			"path": "/", "pathType": "Prefix",
+			"backend": map[string]any{"service": map[string]any{"name": "care", "port": map[string]any{"number": int64(80)}}},
+		}}}}},
+	}})
+	o.Object["apiVersion"] = "networking.k8s.io/v1"
+	return o
 }
