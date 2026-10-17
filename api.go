@@ -212,7 +212,7 @@ func (a *App) auditHistory(w http.ResponseWriter, r *http.Request) {
 	reply(w, 200, out)
 }
 func (a *App) state(w http.ResponseWriter, r *http.Request) {
-	s, err := a.settings()
+	s, err := a.settingsFor(r)
 	if err != nil {
 		fail(w, 500, "cannot read settings")
 		return
@@ -258,7 +258,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > 0 {
-		old, err := a.settings()
+		old, err := a.settingsFor(r)
 		if err != nil {
 			fail(w, 500, "cannot read settings")
 			return

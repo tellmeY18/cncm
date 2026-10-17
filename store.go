@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +92,29 @@ func randomBytes(n int) []byte {
 }
 func tokenHash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func now() string               { return time.Now().UTC().Format(time.RFC3339) }
+
+// settingsFor returns saved settings. Until settings are saved, the CARE address
+// follows how the browser reached CNCM: cncm.cncm-system.local[:port] suggests
+// care.care.local[:port], the layout Containers Anywhere publishes.
+func (a *App) settingsFor(r *http.Request) (Settings, error) {
+	s, err := a.settings()
+	if err != nil {
+		return s, err
+	}
+	var saved int
+	if a.db.QueryRow("SELECT count(*) FROM settings WHERE id=1").Scan(&saved) == nil && saved == 0 {
+		host, port := r.Host, ""
+		if h, p, e := net.SplitHostPort(r.Host); e == nil {
+			host, port = h, ":"+p
+		}
+		for _, tld := range []string{"local", "localhost"} {
+			if host == "cncm.cncm-system."+tld {
+				s.CareURL = "http://care.care." + tld + port
+			}
+		}
+	}
+	return s, nil
+}
 
 func (a *App) settings() (Settings, error) {
 	s := defaultSettings()

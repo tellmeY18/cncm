@@ -54,7 +54,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	origin := env("CNCM_ORIGIN", "http://localhost:8080")
-	if err = validateOrigin(origin); err != nil {
+	if origin == "auto" {
+		origin = "" // accept the origin the browser used, as long as it matches the Host header
+	} else if err = validateOrigin(origin); err != nil {
 		log.Fatal("CNCM_ORIGIN: ", err)
 	}
 	a := &App{db: db, origin: origin, bootstrap: os.Getenv("CNCM_BOOTSTRAP_TOKEN"), ctx: ctx}
@@ -79,7 +81,7 @@ func main() {
 		defer done()
 		_ = server.Shutdown(shutdown)
 	}()
-	log.Printf("CNCM listening on %s (browser origin %s)", server.Addr, origin)
+	log.Printf("CNCM listening on %s (browser origin %q)", server.Addr, origin)
 	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -116,11 +118,21 @@ func (a *App) routes() http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != "GET" && r.Method != "HEAD" {
-			if r.Header.Get("Origin") != a.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			if !a.allowedOrigin(r) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 				fail(w, 403, "request must originate from the configured CNCM origin")
 				return
 			}
 		}
 		m.ServeHTTP(w, r)
 	})
+}
+
+// allowedOrigin checks the Origin header against the configured origin, or, in
+// auto mode, against the Host the browser addressed.
+func (a *App) allowedOrigin(r *http.Request) bool {
+	got := r.Header.Get("Origin")
+	if a.origin != "" {
+		return got == a.origin
+	}
+	return got == "http://"+r.Host || got == "https://"+r.Host
 }

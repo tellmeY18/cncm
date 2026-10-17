@@ -84,10 +84,13 @@ func (a *App) startOperation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s, err := a.settings()
+	s, err := a.settingsFor(r)
 	if err != nil {
 		fail(w, 500, "cannot read settings")
 		return
+	}
+	if data, e := json.Marshal(s); e == nil {
+		_, _ = a.db.Exec("INSERT OR IGNORE INTO settings VALUES(1,?)", string(data))
 	}
 	id, err := a.begin(req.Kind, a.user(r))
 	if err != nil {
@@ -606,16 +609,24 @@ func careIngress(careURL string) *unstructured.Unstructured {
 		return nil
 	}
 	host := u.Hostname()
-	if !strings.HasSuffix(host, ".local") && !strings.HasSuffix(host, ".localhost") {
+	var hosts []any
+	for _, tld := range []string{".local", ".localhost"} {
+		if strings.HasSuffix(host, tld) {
+			base := strings.TrimSuffix(host, tld)
+			hosts = []any{base + ".local", base + ".localhost"}
+		}
+	}
+	if hosts == nil {
 		return nil
 	}
-	o := object("Ingress", "care", map[string]any{"spec": map[string]any{
-		"ingressClassName": "containers-anywhere",
-		"rules": []any{map[string]any{"host": host, "http": map[string]any{"paths": []any{map[string]any{
+	var rules []any
+	for _, h := range hosts {
+		rules = append(rules, map[string]any{"host": h, "http": map[string]any{"paths": []any{map[string]any{
 			"path": "/", "pathType": "Prefix",
 			"backend": map[string]any{"service": map[string]any{"name": "care", "port": map[string]any{"number": int64(80)}}},
-		}}}}},
-	}})
+		}}}})
+	}
+	o := object("Ingress", "care", map[string]any{"spec": map[string]any{"ingressClassName": "containers-anywhere", "rules": rules}})
 	o.Object["apiVersion"] = "networking.k8s.io/v1"
 	return o
 }
