@@ -98,3 +98,10 @@ the PVC and Secret; do not uninstall/reinstall the namespace to update the image
 
 Image publication and local checks do not establish live-cluster acceptance.
 No workload testing is performed without explicit permission for the target.
+
+## Preinstalled with Containers Anywhere
+
+Recent Containers Anywhere builds ship CNCM already running (`CNCM_ORIGIN=auto`).
+Choose **Open CNCM** in its control panel: the bootstrap token is filled in for you,
+and the CARE address defaults to the matching `care.care.local` name. Steps 1–3
+above are only needed on other clusters.

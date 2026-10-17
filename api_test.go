@@ -216,3 +216,25 @@ func TestEmbeddedUI(t *testing.T) {
 		t.Fatal("missing CSP")
 	}
 }
+
+func TestAutoOriginAndDerivedCareURL(t *testing.T) {
+	a := testApp(t)
+	a.origin = ""
+	r := httptest.NewRequest("POST", "http://cncm.cncm-system.local:8080/api/login", nil)
+	r.Header.Set("Origin", "http://cncm.cncm-system.local:8080")
+	if !a.allowedOrigin(r) {
+		t.Fatal("same-origin request rejected in auto mode")
+	}
+	r.Header.Set("Origin", "http://evil.example")
+	if a.allowedOrigin(r) {
+		t.Fatal("foreign origin accepted in auto mode")
+	}
+	s, err := a.settingsFor(httptest.NewRequest("GET", "http://cncm.cncm-system.local:8080/api/state", nil))
+	if err != nil || s.CareURL != "http://care.care.local:8080" {
+		t.Fatalf("derived CARE URL %q, %v", s.CareURL, err)
+	}
+	s, _ = a.settingsFor(httptest.NewRequest("GET", "http://localhost:8080/api/state", nil))
+	if s.CareURL != defaultSettings().CareURL {
+		t.Fatalf("unexpected derivation for %q", s.CareURL)
+	}
+}
