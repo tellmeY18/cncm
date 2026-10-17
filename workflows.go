@@ -480,7 +480,7 @@ func (a *App) install(ctx context.Context, id string, req operationRequest, s Se
 	if err != nil {
 		return err
 	}
-	if err = a.kube.createSecret(ctx, "care-secrets", map[string]string{"DATABASE_URL": "postgres://care:" + url.QueryEscape(db["password"]) + "@care-db-rw:5432/care", "DJANGO_SECRET_KEY": randomToken(), "JWKS_BASE64": keys, "BUCKET_KEY": silo["MINIO_ROOT_USER"], "BUCKET_SECRET": silo["MINIO_ROOT_PASSWORD"]}); err != nil {
+	if err = a.kube.createSecret(ctx, "care-secrets", map[string]string{"DATABASE_URL": "postgres://care:" + url.QueryEscape(db["password"]) + "@care-db-rw:5432/care", "POSTGRES_HOST": "care-db-rw", "POSTGRES_PORT": "5432", "POSTGRES_DB": "care", "POSTGRES_USER": "care", "POSTGRES_PASSWORD": db["password"], "DJANGO_SECRET_KEY": randomToken(), "JWKS_BASE64": keys, "BUCKET_KEY": silo["MINIO_ROOT_USER"], "BUCKET_SECRET": silo["MINIO_ROOT_PASSWORD"]}); err != nil {
 		return err
 	}
 	if err = a.kube.createSecret(ctx, "care-initial-admin", map[string]string{"DJANGO_SUPERUSER_USERNAME": req.AdminUsername, "DJANGO_SUPERUSER_PASSWORD": req.AdminPassword, "DJANGO_SUPERUSER_EMAIL": req.AdminEmail}); err != nil {
