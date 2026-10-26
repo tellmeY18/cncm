@@ -3,6 +3,7 @@ name: Check and publish CNCM
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -28,10 +29,18 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - run: cd web && npm ci && npx playwright install --with-deps chromium
+      - name: Verify release version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          test "$TAG" = "v$(node -p "require('./web/package.json').version")"
+          grep -Fq "\"version\": \"${TAG#v}\"" api.go
       - run: make check
 
   publish:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -46,6 +55,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Choose image tags
+        id: tags
+        env:
+          REF: ${{ github.ref }}
+          NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF" = refs/heads/main ]; then
+            echo 'version=ghcr.io/tellmey18/cncm:edge' >> "$GITHUB_OUTPUT"
+          else
+            echo "version=ghcr.io/tellmey18/cncm:${NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         id: image
         with:
@@ -53,7 +73,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/tellmey18/cncm:edge
+            ${{ steps.tags.outputs.version }}
             ghcr.io/tellmey18/cncm:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
@@ -64,3 +84,58 @@ jobs:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           printf '### CNCM image\n\n`ghcr.io/tellmey18/cncm@%s`\n\nPlatforms: linux/amd64, linux/arm64.\n' "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make web
+      - name: Package embedded binaries
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist staging
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -o staging/cncm .
+            cp README.md LICENSE DEPLOYMENT.md KITE.md staging/
+            tar -C staging -czf "dist/cncm-${TAG}-${os}-${arch}.tar.gz" cncm README.md LICENSE DEPLOYMENT.md KITE.md
+          done
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+      - name: Publish POC release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > release-notes.txt <<'NOTES'
+          First-install proof of concept. Use disposable test data only.
+
+          CareUI-aligned interface with locally bundled variable fonts, accessible
+          operation confirmations, explicit workload readiness, protected settings
+          drafts, and clearer failure and interruption guidance.
+
+          Includes Linux and macOS embedded binaries for AMD64/ARM64, SHA-256
+          checksums, and the multi-architecture container image
+          `ghcr.io/tellmey18/cncm:0.1.0`.
+
+          No live-cluster acceptance has been performed. Backup, restore, upgrades,
+          plugin management, and machine-level controls are not supported.
+          Windows hosts use the Linux appliance, not a native Windows binary.
+          See README.md and DEPLOYMENT.md before installation.
+          NOTES
+          gh release create "$TAG" dist/* --verify-tag --title "CNCM ${TAG#v} - first-install POC" --notes-file release-notes.txt

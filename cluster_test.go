@@ -24,6 +24,66 @@ func fakeCluster(objects ...runtime.Object) *Cluster {
 	return &Cluster{client: fake.NewSimpleDynamicClient(runtime.NewScheme(), objects...), mapper: mapper, target: "fake-only"}
 }
 
+func TestWorkloadHealthDoesNotConfuseInstalledStoppedAndReady(t *testing.T) {
+	readyItems := func() []unstructured.Unstructured {
+		items := []unstructured.Unstructured{}
+		for _, name := range careDeployments {
+			item := object("Deployment", name, map[string]any{
+				"spec": map[string]any{"replicas": int64(1)},
+				"status": map[string]any{
+					"observedGeneration": int64(2), "replicas": int64(1),
+					"availableReplicas": int64(1), "updatedReplicas": int64(1),
+				},
+			})
+			item.SetGeneration(2)
+			item.SetLabels(map[string]string{"app.kubernetes.io/managed-by": managedBy})
+			items = append(items, *item)
+		}
+		return items
+	}
+	tests := []struct {
+		name string
+		edit func([]unstructured.Unstructured) []unstructured.Unstructured
+		want string
+	}{
+		{"absent", func(_ []unstructured.Unstructured) []unstructured.Unstructured { return nil }, "Not installed"},
+		{"ready", func(items []unstructured.Unstructured) []unstructured.Unstructured { return items }, "Workloads ready"},
+		{"missing component", func(items []unstructured.Unstructured) []unstructured.Unstructured { return items[1:] }, "Needs attention"},
+		{"unmanaged", func(items []unstructured.Unstructured) []unstructured.Unstructured {
+			items[0].SetLabels(nil)
+			return items
+		}, "Needs attention"},
+		{"stale readiness", func(items []unstructured.Unstructured) []unstructured.Unstructured {
+			items[0].SetGeneration(3)
+			return items
+		}, "Not ready"},
+		{"not available", func(items []unstructured.Unstructured) []unstructured.Unstructured {
+			_ = unstructured.SetNestedField(items[0].Object, int64(0), "status", "availableReplicas")
+			return items
+		}, "Not ready"},
+		{"stopping", func(items []unstructured.Unstructured) []unstructured.Unstructured {
+			for i := range items {
+				_ = unstructured.SetNestedField(items[i].Object, int64(0), "spec", "replicas")
+			}
+			return items
+		}, "Not ready"},
+		{"stopped", func(items []unstructured.Unstructured) []unstructured.Unstructured {
+			for i := range items {
+				_ = unstructured.SetNestedField(items[i].Object, int64(0), "spec", "replicas")
+				_ = unstructured.SetNestedField(items[i].Object, int64(0), "status", "replicas")
+			}
+			return items
+		}, "Stopped"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workloadHealth(tt.edit(readyItems())); got != tt.want {
+				t.Fatalf("health = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSecretsPreservedAndUnmanagedResourcesRefused(t *testing.T) {
 	ctx := context.Background()
 	existing := object("Secret", "credentials", map[string]any{"data": map[string]any{"password": "cHJlc2VydmU="}})

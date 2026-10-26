@@ -291,6 +291,7 @@ func (a *App) clusterStatus(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"name": p.GetName(), "phase": phase, "ready": ready, "total": total, "restarts": restarts, "reason": reason, "containers": names})
 	}
 	events := []map[string]string{}
+	eventsError := ""
 	ev, err := a.kube.client.Resource(gvr("", "v1", "events")).Namespace(namespace).List(ctx, metav1.ListOptions{Limit: 50})
 	if err == nil {
 		for _, e := range ev.Items {
@@ -298,8 +299,57 @@ func (a *App) clusterStatus(w http.ResponseWriter, r *http.Request) {
 			message, _, _ := unstructured.NestedString(e.Object, "message")
 			events = append(events, map[string]string{"reason": reason, "message": redact(message)})
 		}
+	} else {
+		eventsError = "Cannot read Kubernetes events; check cluster permissions."
 	}
-	reply(w, 200, map[string]any{"pods": out, "events": events})
+	health := "Status unavailable"
+	healthError := ""
+	workloads, err := a.kube.client.Resource(deployments).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		health = workloadHealth(workloads.Items)
+	} else {
+		healthError = "Cannot read CARE deployment readiness; check cluster access and permissions."
+	}
+	reply(w, 200, map[string]any{"pods": out, "events": events, "eventsError": eventsError, "health": health, "healthError": healthError})
+}
+
+func workloadHealth(items []unstructured.Unstructured) string {
+	found, stopped, ready := 0, 0, 0
+	for _, name := range careDeployments {
+		for _, item := range items {
+			if item.GetName() != name || item.GetLabels()["app.kubernetes.io/managed-by"] != managedBy {
+				continue
+			}
+			found++
+			desired, exists, _ := unstructured.NestedInt64(item.Object, "spec", "replicas")
+			if !exists {
+				desired = 1
+			}
+			observed, _, _ := unstructured.NestedInt64(item.Object, "status", "observedGeneration")
+			actual, _, _ := unstructured.NestedInt64(item.Object, "status", "replicas")
+			if desired == 0 {
+				if observed >= item.GetGeneration() && actual == 0 {
+					stopped++
+				}
+			} else if ok, _ := deploymentReady(&item); ok {
+				ready++
+			}
+			break
+		}
+	}
+	if found == 0 {
+		return "Not installed"
+	}
+	if found != len(careDeployments) {
+		return "Needs attention"
+	}
+	if stopped == found {
+		return "Stopped"
+	}
+	if ready == found {
+		return "Workloads ready"
+	}
+	return "Not ready"
 }
 
 var podName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,252}$`)

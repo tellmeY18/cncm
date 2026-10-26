@@ -10,6 +10,7 @@ run: build
 	./bin/cncm
 
 check: web
+	cd web && npm run test:ui
 	@test -z "$$(gofmt -l *.go)" || (gofmt -l *.go; exit 1)
 	go vet ./...
 	go test -race ./...

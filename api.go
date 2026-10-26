@@ -231,7 +231,7 @@ func (a *App) state(w http.ResponseWriter, r *http.Request) {
 	if a.kube != nil {
 		target = a.kube.target
 	}
-	reply(w, 200, map[string]any{"settings": s, "operations": ops, "releases": rels, "cluster": target, "connected": a.kube != nil, "version": "0.1.0-poc"})
+	reply(w, 200, map[string]any{"settings": s, "operations": ops, "releases": rels, "cluster": target, "connected": a.kube != nil, "version": "0.1.0"})
 }
 func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()

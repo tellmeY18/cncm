@@ -6,6 +6,25 @@ A CARE-specific management portal for one machine, one Kubernetes cluster, and
 one CARE installation. Go + embedded React, SQLite, and repository-owned plain
 Kubernetes YAML. Inspired by Kite; styled after [CareUI](https://careui.ohc.network/).
 
+## Version 0.1.0
+
+This release polishes the existing first-install POC; it does not add production
+lifecycle support. The UI follows CareUI's light-theme tokens, emerald primary,
+Figtree Variable/Geist Mono Variable fonts, control sizing, focus treatment and
+10px base radius. Fonts are bundled locally.
+
+The dashboard distinguishes installation from observed workload readiness and
+stopped state. Workload readiness does not prove clinical functionality or LAN
+access. Operations use keyboard-accessible confirmation dialogs, with explicit
+cluster targets and safe cancellation. Settings drafts survive polling and require
+confirmation before being discarded. Saving configuration affects future
+operations; it does not reconfigure an existing CARE installation.
+
+Tagged releases publish Linux/macOS AMD64 and ARM64 archives with SHA-256
+checksums and a multi-architecture image at `ghcr.io/tellmey18/cncm:0.1.0`.
+Windows hosts use the Linux VM. These binaries are not signed or notarized.
+No live-cluster acceptance has been performed for this POC.
+
 **This is the first-install POC, not the complete lifecycle product yet. No live
 cluster acceptance has been performed. Use disposable test data only.**
 
@@ -23,7 +42,7 @@ images at `ghcr.io/tellmey18/cncm:edge` and `sha-<full-commit>` after checks pas
 - Bootstrap-token-protected administrator setup; local password authentication,
   HttpOnly sessions, same-origin mutation checks, and an audit trail.
 - A locally runnable portal with Overview, Setup, Builds & releases, Services,
-  Backups roadmap, Activity, and Settings screens. Figtree and Geist Mono are
+  Backups limitations, Activity, and Settings screens. Figtree and Geist Mono are
   bundled locally; the management UI requires no CDN fonts.
 - SQLite-backed settings, operations, source commits, image digests, and release
   history. Only one mutation may run at a time.
@@ -63,7 +82,7 @@ authorized disposable-cluster acceptance must establish that.
 - CPU/RAM/disk capacity enforcement, multi-node/HA, fully offline builds, or
   migration from `care_clinic`.
 
-The Backups screen is explicitly a roadmap, not a functioning backup control.
+The Backups screen explains limitations; it is not a functioning backup control.
 **Persistent volumes are not backups.** Upgrades remain unavailable until recovery
 of the database, Silo objects, credentials, CNCM state, and matching images is
 implemented and tested together.
@@ -222,15 +241,24 @@ clinical information. Do not use real patient data for this POC.
 ## Local checks
 
 ```sh
+cd web && npm ci && npx playwright install chromium && cd ..
 make check
 make build
 ```
 
 Checks include TypeScript/build, Go formatting, vet, race-enabled tests,
 authentication/same-origin checks, durable operation serialization/restart
-recovery, and manifest/fake-Kubernetes contracts. Tests do not discover or contact
-a real cluster. No live deployment, real CARE build, Docker image build, or
+recovery, manifest/fake-Kubernetes contracts, and desktop/mobile Chromium UI
+regressions using intercepted API responses. UI checks cover disconnected mode,
+modal focus/cancellation, unsaved edits, uncertain-operation guards, errors,
+readiness labels and responsive layout. The test server is loopback-only; these
+tests do not discover or contact a real cluster. No live deployment, real CARE build, or
 end-to-end clinical acceptance has been performed as part of this implementation.
+
+Release tags must match the UI/API version. CI runs `make check` before publishing
+the versioned AMD64/ARM64 image, then packages embedded Linux/macOS binaries and
+publishes the GitHub release with checksums. A green release pipeline does not
+establish runtime acceptance on a cluster or physical host.
 
 ## Next milestones
 
