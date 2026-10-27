@@ -553,6 +553,9 @@ func (a *App) install(ctx context.Context, id string, req operationRequest, s Se
 func (a *App) publishCare(ctx context.Context, id, careURL string) error {
 	objs := carePublication(careURL)
 	if objs == nil {
+		if strings.HasSuffix(careURL, ".local") || strings.Contains(careURL, ".local:") || strings.Contains(careURL, ".localhost") {
+			return a.stage(id, "CARE is not published: Containers Anywhere only routes <name>."+namespace+".local or the bare "+namespace+".local")
+		}
 		return nil
 	}
 	if err := a.kube.apply(ctx, objs[0]); err != nil {
@@ -627,7 +630,8 @@ const publicationAPI = "networking.containersanywhere.dev/v1alpha1"
 
 // carePublication returns the Ingress and Containers Anywhere WorkloadPublications
 // that expose CARE at a .local/.localhost browser address. Containers Anywhere
-// 0.2.0 only routes hostnames beneath <namespace>.local or <namespace>.localhost, so any
+// routes hostnames beneath <namespace>.local or <namespace>.localhost, or the bare
+// <namespace>.local (Containers Anywhere 0.3.2+), so any
 // other address (port-forward, external ingress) returns nil. An http:// address
 // asks for plain HTTP; https:// uses the appliance's local CA. The first object
 // is the Ingress; the rest are publications.
@@ -642,7 +646,7 @@ func carePublication(careURL string) []*unstructured.Unstructured {
 			base = strings.TrimSuffix(host, tld)
 		}
 	}
-	if !strings.HasSuffix(base, "."+namespace) {
+	if base != namespace && !strings.HasSuffix(base, "."+namespace) {
 		return nil
 	}
 	mode := "LocalCA"

@@ -276,10 +276,13 @@ func TestCarePublication(t *testing.T) {
 	if spec(2, "hostname") != "care.care.localhost" || spec(2, "lan") != false || spec(2, "mdns") != false {
 		t.Fatalf("bad .localhost publication %v", objs[2].Object["spec"])
 	}
+	if o := carePublication("https://care.local"); len(o) != 3 || o[1].Object["spec"].(map[string]any)["hostname"] != "care.local" || o[2].Object["spec"].(map[string]any)["hostname"] != "care.localhost" {
+		t.Fatal("the bare namespace name must be publishable")
+	}
 	if carePublication("http://care.care.local")[1].Object["spec"].(map[string]any)["tls"].(map[string]any)["mode"] != "HTTP" {
 		t.Fatal("http address must request HTTP mode")
 	}
-	for _, u := range []string{"http://localhost:8090", "https://care.example.com", "https://care.local", "https://care.other.local", "https://care.care.local.evil.com"} {
+	for _, u := range []string{"http://localhost:8090", "https://care.example.com", "https://other.local", "https://care.other.local", "https://care.care.local.evil.com"} {
 		if carePublication(u) != nil {
 			t.Fatalf("%s must not be published", u)
 		}
