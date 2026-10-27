@@ -71,6 +71,12 @@ func main() {
 	if err = db.QueryRow("SELECT count(*) FROM users").Scan(&users); err != nil {
 		log.Fatal(err)
 	}
+	if ns := os.Getenv("CNCM_NAMESPACE"); users == 0 && len(a.bootstrap) < 24 && a.kube != nil && ns != "" {
+		if a.bootstrap, err = a.kube.bootstrapToken(ctx, ns); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("setup token is stored in Secret %s/cncm-bootstrap", ns)
+	}
 	if users == 0 && len(a.bootstrap) < 24 {
 		log.Fatal("set CNCM_BOOTSTRAP_TOKEN to a random value of at least 24 characters; it is never printed")
 	}
@@ -105,6 +111,9 @@ func (a *App) routes() http.Handler {
 	m.HandleFunc("PUT /api/settings", a.authorized(a.saveSettings))
 	m.HandleFunc("GET /api/cluster", a.authorized(a.clusterStatus))
 	m.HandleFunc("GET /api/logs", a.authorized(a.logs))
+	m.HandleFunc("GET /api/host", a.authorized(a.hostState))
+	m.HandleFunc("POST /api/host/requests", a.authorized(a.createHostRequest))
+	m.HandleFunc("DELETE /api/host/requests/{name}", a.authorized(a.deleteHostRequest))
 	m.HandleFunc("POST /api/operations", a.authorized(a.startOperation))
 	m.HandleFunc("POST /api/operations/{id}/acknowledge", a.authorized(a.acknowledge))
 	m.HandleFunc("GET /api/audit", a.authorized(a.auditHistory))

@@ -19,7 +19,36 @@ The **manager** uses ordinary Kubernetes resources. The **CARE installation**
 workflow still requires one Linux node, privileged BuildKit Jobs, sufficient build
 capacity, and local-registry runtime configuration. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
-## 1. Apply the manager manifest in Kite
+## Fastest path: Containers Anywhere 0.2.0 + Kite
+
+Containers Anywhere 0.2.0 no longer preinstalls CNCM; Kite is the entry point. Two
+steps install and publish CNCM with HTTPS on your LAN:
+
+1. In Kite, open the YAML editor and apply the single file
+   **https://raw.githubusercontent.com/tellmeY18/cncm/main/manifests/cncm-containers-anywhere.yaml**
+   (it holds the manager plus its `WorkloadPublication`).
+2. Wait for the `cncm` pod to become Ready, then open **https://cncm.cncm-system.local**
+   (or **https://cncm.cncm-system.localhost** on the same computer; add `:8443` if the
+   launcher fell back from port 443). Your browser warns until you trust the appliance's
+   local CA: download its public `/root.crt` from the HTTP address, verify it with
+   your administrator, and trust it.
+
+No Secret needs to be authored. On first start CNCM creates Secret `cncm-bootstrap`
+with a random token; in Kite open **Secrets → cncm-system → cncm-bootstrap → token**,
+copy it into the setup form, and create the administrator. To choose the token
+yourself, create that Secret (key `token`, 24+ characters) before applying. The
+token is never logged. CARE then defaults to `https://care.care.local` and is
+published the same way when installed.
+
+On Containers Anywhere 0.3.0+, CNCM also trusts its image registry through the host API
+and adds a **Host** screen; on 0.2.0 the registry trust remains a manual node step.
+
+CNCM needs the first-boot internet access Containers Anywhere 0.2.0 already requires.
+The generic steps below are for clusters without Containers Anywhere's publication API.
+
+## Other clusters
+
+### 1. Apply the manager manifest in Kite
 
 Open Kite's YAML apply/editor facility for the intended cluster and paste the
 contents of this file (or import its URL if your Kite version supports that):
@@ -27,13 +56,12 @@ contents of this file (or import its URL if your Kite version supports that):
 **https://raw.githubusercontent.com/tellmeY18/cncm/main/manifests/cncm.yaml**
 
 Review and apply it. This creates `cncm-system`, the manager's service account and
-cluster-admin binding, PVC, Deployment, and Service. The pod waits for the
-bootstrap Secret from the next step; `CreateContainerConfigError` is expected
-until that Secret exists.
+cluster-admin binding, PVC, Deployment, and Service. CNCM generates its own bootstrap
+Secret on first start unless you create one first (next step).
 
 Apply only this file, not the entire `manifests/` directory. Keep one replica.
 
-## 2. Create the bootstrap Secret in Kite
+### 2. Bootstrap Secret (optional)
 
 In namespace **`cncm-system`**, create a Secret with:
 
@@ -53,7 +81,7 @@ installs/restarts; it is still referenced by the Deployment.
 The pod should now start. Inspect its status and logs in Kite. Do not use
 **Prepare infrastructure** yet unless the target is approved for CARE workloads.
 
-## 3. Open CNCM at a dedicated browser origin
+### 3. Open CNCM at a dedicated browser origin
 
 Use a **workstation-local** port-forward to Service `cncm`, remote port **8080**,
 local port **8080**, if your Kite version provides one. Otherwise, on a workstation
@@ -71,10 +99,8 @@ administrator. The portal now works; no CARE workloads are installed automatical
 A port-forward run inside a Kite pod terminal is local to that pod, not your
 workstation. CNCM also needs its own origin, not a path beneath Kite's origin.
 
-If Containers Anywhere is your only access to the cluster and provides neither
-host kubeconfig nor workload forwarding, applying YAML in Kite installs CNCM but
-does not make it reachable from your host. That access depends on
-[Containers Anywhere issue #2](https://github.com/tellmeY18/containers_anywhere/issues/2).
+On Containers Anywhere older than 0.2.0, applying YAML in Kite installs CNCM but
+does not make it reachable from your host; use the 0.2.0 fast path above.
 An existing ingress can also expose CNCM at its own HTTPS origin; set
 `CNCM_ORIGIN` accordingly as described in [DEPLOYMENT.md](DEPLOYMENT.md#different-port-or-an-existing-https-ingress).
 
@@ -99,9 +125,8 @@ the PVC and Secret; do not uninstall/reinstall the namespace to update the image
 Image publication and local checks do not establish live-cluster acceptance.
 No workload testing is performed without explicit permission for the target.
 
-## Preinstalled with Containers Anywhere
+## Older Containers Anywhere builds
 
-Recent Containers Anywhere builds ship CNCM already running (`CNCM_ORIGIN=auto`).
-Choose **Open CNCM** in its control panel: the bootstrap token is filled in for you,
-and the CARE address defaults to the matching `care.care.local` name. Steps 1–3
-above are only needed on other clusters.
+The `care-mvp` line preinstalled CNCM with `CNCM_ORIGIN=auto` and an **Open CNCM**
+button that prefilled the token. Containers Anywhere 0.2.0 (`develop`) does not;
+use the fast path above.

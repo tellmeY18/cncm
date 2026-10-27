@@ -230,11 +230,29 @@ func TestAutoOriginAndDerivedCareURL(t *testing.T) {
 		t.Fatal("foreign origin accepted in auto mode")
 	}
 	s, err := a.settingsFor(httptest.NewRequest("GET", "http://cncm.cncm-system.local:8080/api/state", nil))
-	if err != nil || s.CareURL != "http://care.care.local:8080" {
+	if err != nil || s.CareURL != "https://care.care.local:8080" {
 		t.Fatalf("derived CARE URL %q, %v", s.CareURL, err)
 	}
 	s, _ = a.settingsFor(httptest.NewRequest("GET", "http://localhost:8080/api/state", nil))
 	if s.CareURL != defaultSettings().CareURL {
 		t.Fatalf("unexpected derivation for %q", s.CareURL)
+	}
+}
+
+func TestSecureCookiesFollowAutoOriginScheme(t *testing.T) {
+	a := testApp(t)
+	a.origin = ""
+	r := httptest.NewRequest("POST", "https://cncm.cncm-system.local/api/login", nil)
+	r.Header.Set("Origin", "https://cncm.cncm-system.local")
+	if !a.secureCookies(r) {
+		t.Fatal("https browser origin must receive Secure cookies")
+	}
+	r.Header.Set("Origin", "http://cncm.cncm-system.local")
+	if a.secureCookies(r) {
+		t.Fatal("http origin must not be marked Secure")
+	}
+	a.origin = "https://cncm.example.com"
+	if !a.secureCookies(r) {
+		t.Fatal("configured https origin must be Secure")
 	}
 }

@@ -228,3 +228,79 @@ func TestInitializationGuardPreventsMigrationReplay(t *testing.T) {
 		}
 	}
 }
+
+func TestKiteManifestIsGenerated(t *testing.T) {
+	read := func(name string) string {
+		b, err := manifestFiles.ReadFile("manifests/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	want := "# Generated from cncm.yaml and cncm-publication.yaml (CNCM_ORIGIN=auto); do not edit.\n# Paste this one file into Kite on Containers Anywhere 0.2.0+.\n" +
+		strings.Replace(read("cncm.yaml"), "value: 'http://localhost:8080'", "value: auto", 1) + "---\n" + read("cncm-publication.yaml")
+	if read("cncm-containers-anywhere.yaml") != want {
+		t.Fatal("run `make kite-manifest`")
+	}
+	objects, err := parseManifests([]byte(read("cncm-containers-anywhere.yaml")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := map[string]bool{}
+	for _, o := range objects {
+		if o.GetKind() == "WorkloadPublication" {
+			h, _, _ := unstructured.NestedString(o.Object, "spec", "hostname")
+			if !strings.HasSuffix(h, ".cncm-system.local") && !strings.HasSuffix(h, ".cncm-system.localhost") {
+				t.Fatalf("hostname %q is outside the namespace", h)
+			}
+			hosts[h] = true
+		}
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("expected two publications, got %v", hosts)
+	}
+}
+
+func TestCarePublication(t *testing.T) {
+	objs := carePublication("https://care.care.local:8443")
+	if len(objs) != 3 || objs[0].GetKind() != "Ingress" {
+		t.Fatalf("unexpected objects %v", objs)
+	}
+	spec := func(i int, path ...string) any {
+		v, _, _ := unstructured.NestedFieldNoCopy(objs[i].Object, append([]string{"spec"}, path...)...)
+		return v
+	}
+	if spec(1, "hostname") != "care.care.local" || spec(1, "lan") != true || spec(1, "mdns") != true || spec(1, "tls", "mode") != "LocalCA" {
+		t.Fatalf("bad .local publication %v", objs[1].Object["spec"])
+	}
+	if spec(2, "hostname") != "care.care.localhost" || spec(2, "lan") != false || spec(2, "mdns") != false {
+		t.Fatalf("bad .localhost publication %v", objs[2].Object["spec"])
+	}
+	if carePublication("http://care.care.local")[1].Object["spec"].(map[string]any)["tls"].(map[string]any)["mode"] != "HTTP" {
+		t.Fatal("http address must request HTTP mode")
+	}
+	for _, u := range []string{"http://localhost:8090", "https://care.example.com", "https://care.local", "https://care.other.local", "https://care.care.local.evil.com"} {
+		if carePublication(u) != nil {
+			t.Fatalf("%s must not be published", u)
+		}
+	}
+}
+
+func TestPublicationSkippedWithoutAPI(t *testing.T) {
+	k := fakeCluster()
+	if k.hasKind("WorkloadPublication", "networking.containersanywhere.dev", "v1alpha1") {
+		t.Fatal("API unexpectedly present")
+	}
+}
+
+func TestBootstrapTokenIsCreatedOnceAndReused(t *testing.T) {
+	k := fakeCluster()
+	first, err := k.bootstrapToken(context.Background(), "cncm-system")
+	if err != nil || len(first) < 24 {
+		t.Fatalf("token %q, %v", first, err)
+	}
+	second, err := k.bootstrapToken(context.Background(), "cncm-system")
+	if err != nil || second != first {
+		t.Fatal("existing token must be reused, not regenerated")
+	}
+}

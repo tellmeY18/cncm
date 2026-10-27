@@ -37,6 +37,17 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	}
 	return true
 }
+
+// secureCookies follows the configured origin or, in auto mode, the scheme of the
+// same-origin request the browser sent (the mutation check already matched it
+// against Host). TLS is terminated by the gateway, so r.TLS is not consulted.
+func (a *App) secureCookies(r *http.Request) bool {
+	if a.origin != "" {
+		return strings.HasPrefix(a.origin, "https://")
+	}
+	return strings.HasPrefix(r.Header.Get("Origin"), "https://")
+}
+
 func validateOrigin(s string) error {
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
@@ -100,14 +111,14 @@ type credentials struct {
 	BootstrapToken string `json:"bootstrapToken,omitempty"`
 }
 
-func (a *App) session(w http.ResponseWriter, user string) error {
+func (a *App) session(w http.ResponseWriter, r *http.Request, user string) error {
 	token := randomToken()
 	expiry := time.Now().Add(12 * time.Hour)
 	_, err := a.db.Exec("INSERT INTO sessions VALUES(?,?,?)", tokenHash(token), user, expiry.Unix())
 	if err != nil {
 		return err
 	}
-	http.SetCookie(w, &http.Cookie{Name: "cncm_session", Value: token, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(a.origin, "https://"), SameSite: http.SameSiteStrictMode, Expires: expiry})
+	http.SetCookie(w, &http.Cookie{Name: "cncm_session", Value: token, Path: "/", HttpOnly: true, Secure: a.secureCookies(r), SameSite: http.SameSiteStrictMode, Expires: expiry})
 	return nil
 }
 func (a *App) setup(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +155,7 @@ func (a *App) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(c.Username, "created CNCM administrator")
-	if err = a.session(w, c.Username); err != nil {
+	if err = a.session(w, r, c.Username); err != nil {
 		fail(w, 500, "account created; sign in again")
 		return
 	}
@@ -173,7 +184,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "invalid username or password")
 		return
 	}
-	if err = a.session(w, c.Username); err != nil {
+	if err = a.session(w, r, c.Username); err != nil {
 		fail(w, 500, "cannot create session")
 		return
 	}
@@ -187,7 +198,7 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "cannot end session")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "cncm_session", Value: "", Path: "/", HttpOnly: true, Secure: strings.HasPrefix(a.origin, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "cncm_session", Value: "", Path: "/", HttpOnly: true, Secure: a.secureCookies(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	reply(w, 200, map[string]bool{"ok": true})
 }
 func (a *App) audit(user, action string) {
@@ -231,7 +242,7 @@ func (a *App) state(w http.ResponseWriter, r *http.Request) {
 	if a.kube != nil {
 		target = a.kube.target
 	}
-	reply(w, 200, map[string]any{"settings": s, "operations": ops, "releases": rels, "cluster": target, "connected": a.kube != nil, "version": "0.1.0-poc"})
+	reply(w, 200, map[string]any{"settings": s, "operations": ops, "releases": rels, "cluster": target, "connected": a.kube != nil, "version": "0.2.0-poc"})
 }
 func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()

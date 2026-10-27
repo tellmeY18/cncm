@@ -95,7 +95,8 @@ func now() string               { return time.Now().UTC().Format(time.RFC3339) }
 
 // settingsFor returns saved settings. Until settings are saved, the CARE address
 // follows how the browser reached CNCM: cncm.cncm-system.local[:port] suggests
-// care.care.local[:port], the layout Containers Anywhere publishes.
+// https://care.care.local[:port], the layout Containers Anywhere publishes with
+// its local CA.
 func (a *App) settingsFor(r *http.Request) (Settings, error) {
 	s, err := a.settings()
 	if err != nil {
@@ -109,7 +110,7 @@ func (a *App) settingsFor(r *http.Request) (Settings, error) {
 		}
 		for _, tld := range []string{"local", "localhost"} {
 			if host == "cncm.cncm-system."+tld {
-				s.CareURL = "http://care.care." + tld + port
+				s.CareURL = "https://care.care." + tld + port
 			}
 		}
 	}

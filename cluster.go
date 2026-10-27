@@ -127,6 +127,49 @@ func (k *Cluster) resource(obj *unstructured.Unstructured) (dynamic.ResourceInte
 	return k.client.Resource(m.Resource), nil
 }
 
+func (k *Cluster) hasKind(kind, group, version string) bool {
+	gk := schema.GroupKind{Group: group, Kind: kind}
+	if _, err := k.mapper.RESTMapping(gk, version); err == nil {
+		return true
+	}
+	// CRDs may have been installed after the discovery cache was filled.
+	if reset, ok := k.mapper.(interface{ Reset() }); ok {
+		reset.Reset()
+		_, err := k.mapper.RESTMapping(gk, version)
+		return err == nil
+	}
+	return false
+}
+
+// bootstrapToken returns the setup token stored in Secret ns/cncm-bootstrap,
+// creating it with a random value when absent. Operators read it in Kite.
+func (k *Cluster) bootstrapToken(ctx context.Context, ns string) (string, error) {
+	r := k.client.Resource(secrets).Namespace(ns)
+	existing, err := r.Get(ctx, "cncm-bootstrap", metav1.GetOptions{})
+	if err == nil {
+		if v, _, _ := unstructured.NestedString(existing.Object, "data", "token"); v != "" {
+			if b, e := decodeBase64(v); e == nil {
+				return string(b), nil
+			}
+		}
+		if v, _, _ := unstructured.NestedString(existing.Object, "stringData", "token"); v != "" {
+			return v, nil
+		}
+		return "", errors.New("Secret cncm-bootstrap exists without a token key")
+	}
+	if !apierrors.IsNotFound(err) {
+		return "", errors.New("cannot inspect Secret cncm-bootstrap")
+	}
+	token := randomToken()
+	o := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+		"metadata":   map[string]any{"name": "cncm-bootstrap", "namespace": ns, "labels": map[string]any{"app.kubernetes.io/managed-by": managedBy}},
+		"stringData": map[string]any{"token": token}}}
+	if _, err = r.Create(ctx, o, metav1.CreateOptions{}); err != nil {
+		return "", errors.New("cannot create Secret cncm-bootstrap")
+	}
+	return token, nil
+}
+
 func (k *Cluster) apply(ctx context.Context, obj *unstructured.Unstructured) error {
 	labels := obj.GetLabels()
 	if labels == nil {

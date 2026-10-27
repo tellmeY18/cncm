@@ -1,0 +1,143 @@
+# Generated from cncm.yaml and cncm-publication.yaml (CNCM_ORIGIN=auto); do not edit.
+# Paste this one file into Kite on Containers Anywhere 0.2.0+.
+# Bootstrap CNCM only. If Secret cncm-bootstrap does not exist, CNCM creates it
+# with a random setup token on first start; read it in Kite. Supply your own
+# Secret (key: token, 24+ characters) beforehand to choose the value.
+# edge is the latest successful main build. Pin a published sha-* tag or digest
+# for repeatable installs. The image supports Linux amd64 and arm64.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cncm-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cncm
+  namespace: cncm-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cncm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: cncm
+    namespace: cncm-system
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cncm-data
+  namespace: cncm-system
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: cncm}
+  template:
+    metadata:
+      labels: {app: cncm}
+    spec:
+      serviceAccountName: cncm
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: cncm
+          image: ghcr.io/tellmey18/cncm:edge
+          imagePullPolicy: Always
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: CNCM_ADDR, value: '0.0.0.0:8080'}
+            - {name: CNCM_ORIGIN, value: auto}
+            - {name: CNCM_DATA_DIR, value: /data}
+            - name: CNCM_NAMESPACE
+              valueFrom:
+                fieldRef: {fieldPath: metadata.namespace}
+            - name: CNCM_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: cncm-bootstrap, key: token, optional: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: cncm-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  selector: {app: cncm}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# Containers Anywhere 0.2.0+ only: publishes CNCM at https://cncm.cncm-system.local
+# (LAN, mDNS, local CA) and https://cncm.cncm-system.localhost (this computer).
+# Hostnames must sit beneath <namespace>.local / <namespace>.localhost.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  ingressClassName: containers-anywhere
+  rules:
+    - host: cncm.cncm-system.local
+      http:
+        paths: [{path: /, pathType: Prefix, backend: {service: {name: cncm, port: {number: 8080}}}}]
+    - host: cncm.cncm-system.localhost
+      http:
+        paths: [{path: /, pathType: Prefix, backend: {service: {name: cncm, port: {number: 8080}}}}]
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  ingressRef: cncm
+  hostname: cncm.cncm-system.local
+  enabled: true
+  lan: true
+  mdns: true
+  tls: {mode: LocalCA}
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: cncm-localhost
+  namespace: cncm-system
+spec:
+  ingressRef: cncm
+  hostname: cncm.cncm-system.localhost
+  enabled: true
+  lan: false
+  mdns: false
+  tls: {mode: LocalCA}

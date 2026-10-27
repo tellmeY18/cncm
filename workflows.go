@@ -110,7 +110,7 @@ func (a *App) runOperation(id string, req operationRequest, s Settings) {
 	case "preflight":
 		err = a.preflight(ctx, id)
 	case "prepare":
-		err = a.prepare(ctx, id)
+		err = a.prepare(ctx, id, s)
 	case "build":
 		err = a.build(ctx, id, s)
 	case "install":
@@ -189,7 +189,7 @@ func download(ctx context.Context, address string, max int64) ([]byte, error) {
 	return b, nil
 }
 
-func (a *App) prepare(ctx context.Context, id string) error {
+func (a *App) prepare(ctx context.Context, id string, s Settings) error {
 	if err := a.preflight(ctx, id); err != nil {
 		return err
 	}
@@ -250,6 +250,9 @@ func (a *App) prepare(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err = a.trustRegistry(ctx, id, s.Registry); err != nil {
+		return err
 	}
 	if err = a.stage(id, "Waiting for PostgreSQL"); err != nil {
 		return err
@@ -526,10 +529,8 @@ func (a *App) install(ctx context.Context, id string, req operationRequest, s Se
 	}); err != nil {
 		return err
 	}
-	if ing := careIngress(s.CareURL); ing != nil {
-		if err = a.kube.apply(ctx, ing); err != nil {
-			return err
-		}
+	if err = a.publishCare(ctx, id, s.CareURL); err != nil {
+		return err
 	}
 	for _, name := range careDeployments {
 		if err = a.stage(id, "Waiting for "+name); err != nil {
@@ -544,6 +545,28 @@ func (a *App) install(ctx context.Context, id string, req operationRequest, s Se
 	}
 	_, err = a.db.Exec("UPDATE releases SET status='installed' WHERE id=?", req.ReleaseID)
 	return err
+}
+
+// publishCare exposes CARE through the Containers Anywhere gateway when the
+// address and cluster support it. Other clusters keep CARE reachable only through
+// service/care, which the portal's port-forward guidance covers.
+func (a *App) publishCare(ctx context.Context, id, careURL string) error {
+	objs := carePublication(careURL)
+	if objs == nil {
+		return nil
+	}
+	if err := a.kube.apply(ctx, objs[0]); err != nil {
+		return err
+	}
+	if !a.kube.hasKind("WorkloadPublication", "networking.containersanywhere.dev", "v1alpha1") {
+		return a.stage(id, "Containers Anywhere publication API not found; CARE is not published. Expose service/care yourself")
+	}
+	for _, o := range objs[1:] {
+		if err := a.kube.apply(ctx, o); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var careDeployments = []string{"care-api", "care-worker", "care-beat", "care-frontend", "care-proxy"}
@@ -600,33 +623,52 @@ func (a *App) control(ctx context.Context, id, kind string) error {
 	return nil
 }
 
-// careIngress publishes CARE through an Ingress when the browser address is a
-// .local or .localhost name, as used by the Containers Anywhere gateway. For
-// other addresses (port-forward, external ingress) it returns nil.
-func careIngress(careURL string) *unstructured.Unstructured {
+const publicationAPI = "networking.containersanywhere.dev/v1alpha1"
+
+// carePublication returns the Ingress and Containers Anywhere WorkloadPublications
+// that expose CARE at a .local/.localhost browser address. Containers Anywhere
+// 0.2.0 only routes hostnames beneath <namespace>.local or <namespace>.localhost, so any
+// other address (port-forward, external ingress) returns nil. An http:// address
+// asks for plain HTTP; https:// uses the appliance's local CA. The first object
+// is the Ingress; the rest are publications.
+func carePublication(careURL string) []*unstructured.Unstructured {
 	u, err := url.Parse(careURL)
 	if err != nil {
 		return nil
 	}
-	host := u.Hostname()
-	var hosts []any
+	host, base := u.Hostname(), ""
 	for _, tld := range []string{".local", ".localhost"} {
 		if strings.HasSuffix(host, tld) {
-			base := strings.TrimSuffix(host, tld)
-			hosts = []any{base + ".local", base + ".localhost"}
+			base = strings.TrimSuffix(host, tld)
 		}
 	}
-	if hosts == nil {
+	if !strings.HasSuffix(base, "."+namespace) {
 		return nil
 	}
+	mode := "LocalCA"
+	if u.Scheme == "http" {
+		mode = "HTTP"
+	}
 	var rules []any
-	for _, h := range hosts {
+	for _, h := range []string{base + ".local", base + ".localhost"} {
 		rules = append(rules, map[string]any{"host": h, "http": map[string]any{"paths": []any{map[string]any{
 			"path": "/", "pathType": "Prefix",
 			"backend": map[string]any{"service": map[string]any{"name": "care", "port": map[string]any{"number": int64(80)}}},
 		}}}})
 	}
-	o := object("Ingress", "care", map[string]any{"spec": map[string]any{"ingressClassName": "containers-anywhere", "rules": rules}})
-	o.Object["apiVersion"] = "networking.k8s.io/v1"
-	return o
+	ing := object("Ingress", "care", map[string]any{"spec": map[string]any{"ingressClassName": "containers-anywhere", "rules": rules}})
+	ing.Object["apiVersion"] = "networking.k8s.io/v1"
+	out := []*unstructured.Unstructured{ing}
+	for _, p := range []struct {
+		name, host string
+		lan        bool
+	}{{"care", base + ".local", true}, {"care-localhost", base + ".localhost", false}} {
+		o := object("WorkloadPublication", p.name, map[string]any{"spec": map[string]any{
+			"ingressRef": "care", "hostname": p.host, "enabled": true, "lan": p.lan, "mdns": p.lan && strings.HasSuffix(p.host, ".local"),
+			"tls": map[string]any{"mode": mode},
+		}})
+		o.Object["apiVersion"] = publicationAPI
+		out = append(out, o)
+	}
+	return out
 }

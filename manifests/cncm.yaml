@@ -1,4 +1,6 @@
-# Bootstrap CNCM only. Create cncm-bootstrap Secret before starting the pod.
+# Bootstrap CNCM only. If Secret cncm-bootstrap does not exist, CNCM creates it
+# with a random setup token on first start; read it in Kite. Supply your own
+# Secret (key: token, 24+ characters) beforehand to choose the value.
 # edge is the latest successful main build. Pin a published sha-* tag or digest
 # for repeatable installs. The image supports Linux amd64 and arm64.
 apiVersion: v1
@@ -63,9 +65,12 @@ spec:
             - {name: CNCM_ADDR, value: '0.0.0.0:8080'}
             - {name: CNCM_ORIGIN, value: 'http://localhost:8080'}
             - {name: CNCM_DATA_DIR, value: /data}
+            - name: CNCM_NAMESPACE
+              valueFrom:
+                fieldRef: {fieldPath: metadata.namespace}
             - name: CNCM_BOOTSTRAP_TOKEN
               valueFrom:
-                secretKeyRef: {name: cncm-bootstrap, key: token}
+                secretKeyRef: {name: cncm-bootstrap, key: token, optional: true}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

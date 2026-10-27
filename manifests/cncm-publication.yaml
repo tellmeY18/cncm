@@ -1,0 +1,43 @@
+# Containers Anywhere 0.2.0+ only: publishes CNCM at https://cncm.cncm-system.local
+# (LAN, mDNS, local CA) and https://cncm.cncm-system.localhost (this computer).
+# Hostnames must sit beneath <namespace>.local / <namespace>.localhost.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  ingressClassName: containers-anywhere
+  rules:
+    - host: cncm.cncm-system.local
+      http:
+        paths: [{path: /, pathType: Prefix, backend: {service: {name: cncm, port: {number: 8080}}}}]
+    - host: cncm.cncm-system.localhost
+      http:
+        paths: [{path: /, pathType: Prefix, backend: {service: {name: cncm, port: {number: 8080}}}}]
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: cncm
+  namespace: cncm-system
+spec:
+  ingressRef: cncm
+  hostname: cncm.cncm-system.local
+  enabled: true
+  lan: true
+  mdns: true
+  tls: {mode: LocalCA}
+---
+apiVersion: networking.containersanywhere.dev/v1alpha1
+kind: WorkloadPublication
+metadata:
+  name: cncm-localhost
+  namespace: cncm-system
+spec:
+  ingressRef: cncm
+  hostname: cncm.cncm-system.localhost
+  enabled: true
+  lan: false
+  mdns: false
+  tls: {mode: LocalCA}

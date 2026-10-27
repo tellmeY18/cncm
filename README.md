@@ -14,8 +14,8 @@ and publish the manager image, configure its bootstrap token, apply the plain
 YAML, and open the portal. The guide includes registry setup, platform constraints,
 and troubleshooting for the single-node CARE workflow.
 
-**Using Kite?** Follow [the Kite quickstart](KITE.md): apply the manager manifest,
-create its bootstrap Secret, and open the portal. GitHub Actions builds AMD64/ARM64
+**Using Kite on Containers Anywhere 0.2.0?** Follow [the Kite quickstart](KITE.md): apply one
+YAML file, copy the generated token from a Secret, and open `https://cncm.cncm-system.local`. GitHub Actions builds AMD64/ARM64
 images at `ghcr.io/tellmey18/cncm:edge` and `sha-<full-commit>` after checks pass.
 
 ## What this cut implements
@@ -48,6 +48,14 @@ These paths compile and have local tests; successful compilation is **not** proo
 that upstream images build or the workload runs on a real cluster. The first
 authorized disposable-cluster acceptance must establish that.
 
+- Containers Anywhere 0.3.0 host API, used only when present (otherwise CNCM behaves
+  as before): **Prepare infrastructure** asks the appliance to trust the in-cluster
+  registry through `HostRegistryTrust`; a **Host** screen shows current host facts
+  (memory, CPUs, disk pressure, update state, autostart, root-CA fingerprint) and lets
+  the administrator send approval-gated `HostRequest`s (resize, autostart, power, image
+  prune, LAN check). A person approves them in the Containers Anywhere panel. Stale or
+  missing facts are shown as unknown, never replayed.
+
 ## What is not implemented
 
 - Applying updates to an existing CARE installation or automatic rollback.
@@ -56,7 +64,9 @@ authorized disposable-cluster acceptance must establish that.
   backup schedules, file backups, recovery exports, or restore.
 - Clinic/plugin configuration editors beyond clinic name, browser origin, and
   registry address. No plugin marketplace or arbitrary source repositories.
-- LAN forwarding, mDNS, client certificate onboarding, or production TLS.
+- Client certificate onboarding or production TLS. LAN publication, mDNS and local-CA
+  HTTPS use the Containers Anywhere 0.2.0 `WorkloadPublication` API when present; their
+  behaviour has not been verified on a live appliance.
 - CNCM password recovery, multiple administrators/roles, OAuth/LDAP/MFA/passkeys,
   CNCM self-update, or uninstall/data destruction.
 - Automatic registry/containerd configuration or automatic image/cache pruning.
@@ -145,6 +155,11 @@ development path, not clinic LAN delivery. TLS-dependent CARE features and devic
 access need the future launcher integration.
 
 ### Local registry contract
+
+On Containers Anywhere 0.3.0+ the node trust step below is automatic: CNCM creates a
+`HostRegistryTrust` for the registry address (it must be `localhost` or an IP with a
+port) and reports the result. On other clusters it stays a manual node-administrator
+step.
 
 The Distribution registry uses a 20 GiB PVC and NodePort **30500**, with HTTP and
 no authentication for this isolated POC. BuildKit pushes to
@@ -241,7 +256,7 @@ end-to-end clinical acceptance has been performed as part of this implementation
 3. Prove restore into a clean installation, then enable migration-safe upgrades.
 4. CARE settings and reviewed plugin workflows.
 5. Containers Anywhere access and host-destination integration:
-   - [#2: workload/LAN forwarding](https://github.com/tellmeY18/containers_anywhere/issues/2)
+   - Workload/LAN forwarding: delivered in 0.2.0 as `WorkloadPublication` (closed #2)
    - [#3: host backup destinations](https://github.com/tellmeY18/containers_anywhere/issues/3)
 
 Local folders, USB disks, Google Drive and other consumer destinations are planned
