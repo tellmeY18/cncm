@@ -56,6 +56,14 @@ authorized disposable-cluster acceptance must establish that.
   prune, LAN check). A person approves them in the Containers Anywhere panel. Stale or
   missing facts are shown as unknown, never replayed.
 
+- **Local recovery points** on any cluster with CSI `VolumeSnapshot` support (Containers
+  Anywhere 0.4.2's btrfs disk provides it): a CloudNativePG volume-snapshot backup of the
+  database plus a snapshot of the Silo file volume, taken with CARE stopped (database and
+  files match) or live (crash-consistent, captured moments apart). The Backups screen lists
+  points, checks that every recorded snapshot still exists and is ready, and deletes them.
+  The **Host** screen can also request disk growth, because 0.4.x starts at an 8 GiB disk
+  while CARE's volumes request about 42 GiB.
+
 ## What is not implemented
 
 - Applying updates to an existing CARE installation or automatic rollback.
@@ -73,7 +81,9 @@ authorized disposable-cluster acceptance must establish that.
 - CPU/RAM/disk capacity enforcement, multi-node/HA, fully offline builds, or
   migration from `care_clinic`.
 
-The Backups screen is explicitly a roadmap, not a functioning backup control.
+Recovery points live on the same disk and exclude Kubernetes Secrets; they are not
+off-device backups, not point-in-time recovery, and **restore is not offered yet**. The
+off-device backup section of the Backups screen is still a roadmap.
 **Persistent volumes are not backups.** Upgrades remain unavailable until recovery
 of the database, Silo objects, credentials, CNCM state, and matching images is
 implemented and tested together.

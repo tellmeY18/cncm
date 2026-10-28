@@ -33,6 +33,8 @@ type operationRequest struct {
 	AdminUsername string `json:"adminUsername,omitempty"`
 	AdminPassword string `json:"adminPassword,omitempty"`
 	AdminEmail    string `json:"adminEmail,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	PointID       string `json:"pointId,omitempty"`
 	Target        string `json:"target"`
 }
 
@@ -52,7 +54,7 @@ func (a *App) startOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Kind {
-	case "preflight", "prepare", "build", "install", "restart", "stop", "start":
+	case "preflight", "prepare", "build", "install", "restart", "stop", "start", "snapshot", "snapshot-delete":
 	default:
 		fail(w, 400, "unsupported operation; upgrades and restore are not enabled in this POC")
 		return
@@ -77,7 +79,15 @@ func (a *App) startOperation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.Kind == "restart" || req.Kind == "stop" || req.Kind == "start" {
+	if req.Kind == "snapshot" && !validConsistency(req.Mode) {
+		fail(w, 400, "choose stopped or live consistency")
+		return
+	}
+	if req.Kind == "snapshot-delete" && !hasPointID(req.PointID) {
+		fail(w, 400, "unknown recovery point")
+		return
+	}
+	if req.Kind == "restart" || req.Kind == "stop" || req.Kind == "start" || req.Kind == "snapshot" {
 		var n int
 		if err := a.db.QueryRow("SELECT count(*) FROM releases WHERE status='installed'").Scan(&n); err != nil || n == 0 {
 			fail(w, 409, "CARE must be installed first")
@@ -117,6 +127,10 @@ func (a *App) runOperation(id string, req operationRequest, s Settings) {
 		err = a.install(ctx, id, req, s)
 	case "restart", "stop", "start":
 		err = a.control(ctx, id, req.Kind)
+	case "snapshot":
+		err = a.snapshotPoint(ctx, id, req.Mode)
+	case "snapshot-delete":
+		err = a.deletePoint(ctx, id, req.PointID)
 	}
 	status, message := "succeeded", "Completed"
 	if err != nil {

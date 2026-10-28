@@ -28,6 +28,9 @@ var hostStatuses = gvr(hostGroup, hostVersion, "hoststatuses")
 var hostRequests = gvr(hostGroup, hostVersion, "hostrequests")
 var registryTrusts = gvr(hostGroup, hostVersion, "hostregistrytrusts")
 
+// Sum of the persistent volume claims CNCM creates (registry, Silo, Redis, database, CNCM).
+const carePVCBytes int64 = 42 << 30
+
 const registryTrustName = "cncm-registry"
 
 type HostView struct {
@@ -62,6 +65,7 @@ type hostRequestInput struct {
 	Reason    string `json:"reason"`
 	CPUs      int    `json:"cpus"`
 	MemoryMiB int    `json:"memoryMiB"`
+	DiskGiB   int    `json:"diskGiB"`
 	Action    string `json:"action"`
 	Enabled   bool   `json:"enabled"`
 	Target    string `json:"target"`
@@ -124,6 +128,11 @@ func hostWarnings(host, guest map[string]any) []string {
 	if disk, ok := guest["disk"].(map[string]any); ok && disk["pressure"] == true {
 		w = append(w, "The appliance data disk is nearly full. Free space before building or backing up.")
 	}
+	if disk, ok := guest["disk"].(map[string]any); ok {
+		if size, ok := disk["sizeBytes"].(int64); ok && size < carePVCBytes {
+			w = append(w, fmt.Sprintf("The appliance disk is %.0f GiB; CARE's volumes request about %d GiB. Request disk growth (it never shrinks) and approve it in the launcher.", float64(size)/(1<<30), carePVCBytes>>30))
+		}
+	}
 	if up, ok := host["update"].(map[string]any); ok {
 		if p, _ := up["phase"].(string); p != "" && p != "idle" && p != "committed" {
 			w = append(w, "An appliance update is in progress ("+p+").")
@@ -165,7 +174,14 @@ func buildHostRequest(ns string, in hostRequestInput) (*unstructured.Unstructure
 		if in.CPUs < 2 || in.CPUs > 64 || in.MemoryMiB < 2048 || in.MemoryMiB > 262144 {
 			return nil, errors.New("cpus must be 2–64 and memoryMiB 2048–262144")
 		}
-		spec["resources"] = map[string]any{"cpus": int64(in.CPUs), "memoryMiB": int64(in.MemoryMiB)}
+		res := map[string]any{"cpus": int64(in.CPUs), "memoryMiB": int64(in.MemoryMiB)}
+		if in.DiskGiB != 0 {
+			if in.DiskGiB < 8 || in.DiskGiB > 256 {
+				return nil, errors.New("diskGiB must be 8–256")
+			}
+			res["diskGiB"] = int64(in.DiskGiB)
+		}
+		spec["resources"] = res
 	case "power":
 		if in.Action != "shutdown" && in.Action != "restart-appliance" {
 			return nil, errors.New("action must be shutdown or restart-appliance")

@@ -43,6 +43,7 @@ HTTP-registry/containerd problem below.
 | Clinic `.local` address, LAN access, HTTPS | CA + CNCM | Publication done; trust onboarding open |
 | Phone/tablet certificate QR page | CA (`/root.crt`, status) + CNCM UI | Not started |
 | Setup wizard with checks (disk, RAM, address clash) | CNCM + CA status | Preflight only |
+| Local recovery points (CSI snapshots, same disk) | CNCM + CA btrfs snapshots | Create/list/verify-present/delete done; **restore not built** |
 | Encrypted nightly backups, retention, backup-now | CNCM (CNPG + Silo) + CA destination | Not started |
 | Backup recovery key + verification + password recovery codes | CNCM | Not started |
 | Restore from file into staging, cutover, journal | CNCM | Not started |
@@ -99,6 +100,16 @@ Still open in Containers Anywhere, deliberately left there: destinations with an
 endpoint (#14), recovery points/schedules (#15), quiesce hooks, kit, restore drill (#16),
 keep-awake and suspend handling (#17), the umbrella (#3) and unverified items (#20).
 Backups, PITR and anything needing those stay in the paused phases above.
+
+## Snapshots (Containers Anywhere 0.4.2, standard CSI)
+
+CA chose standard `VolumeSnapshot`/PVC `dataSource` on a btrfs CSI driver instead of host
+CRDs, so CNCM uses those directly (no CA-specific code). Done: recovery points, health
+checks, delete, disk-growth request. Next, and gated on a tested recovery path (repo rules):
+restore into a new copy (CNPG `bootstrap.recovery.volumeSnapshots` + PVC `dataSource`), a
+restore drill that proves a data marker, scheduled points with retention, and a pre-update
+point. Secrets still need a separate answer (they are in the cluster datastore, covered only
+by CA's appliance restore point). 0.4.x needs a new empty state directory; no migration.
 
 ## Remaining decisions
 

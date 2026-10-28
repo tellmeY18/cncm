@@ -111,6 +111,7 @@ func (a *App) routes() http.Handler {
 	m.HandleFunc("PUT /api/settings", a.authorized(a.saveSettings))
 	m.HandleFunc("GET /api/cluster", a.authorized(a.clusterStatus))
 	m.HandleFunc("GET /api/logs", a.authorized(a.logs))
+	m.HandleFunc("GET /api/recovery-points", a.authorized(a.listRecoveryPoints))
 	m.HandleFunc("GET /api/host", a.authorized(a.hostState))
 	m.HandleFunc("POST /api/host/requests", a.authorized(a.createHostRequest))
 	m.HandleFunc("DELETE /api/host/requests/{name}", a.authorized(a.deleteHostRequest))

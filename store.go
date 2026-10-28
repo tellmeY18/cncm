@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value T
 CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, message TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL, actor TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS one_mutation ON operations((1)) WHERE status IN ('running','uncertain');
 CREATE TABLE IF NOT EXISTS releases (id TEXT PRIMARY KEY, backend_commit TEXT NOT NULL, frontend_commit TEXT NOT NULL, backend_image TEXT NOT NULL DEFAULT '', frontend_image TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS recovery_points (id TEXT PRIMARY KEY, created TEXT NOT NULL, consistency TEXT NOT NULL, release_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, class TEXT NOT NULL DEFAULT '', db_backup TEXT NOT NULL DEFAULT '', snapshots TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, created TEXT NOT NULL);
 UPDATE operations SET status='uncertain', message='CNCM restarted during this operation. Inspect Jobs and resources before acknowledging; no automatic retry.', updated=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE status='running';`)
 	if err != nil {
