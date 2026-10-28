@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -306,4 +307,94 @@ func TestBootstrapTokenIsCreatedOnceAndReused(t *testing.T) {
 	if err != nil || second != first {
 		t.Fatal("existing token must be reused, not regenerated")
 	}
+}
+
+func TestBuildPlanFollowsAvailableCapacity(t *testing.T) {
+	q := resource.MustParse
+	if p := decideBuildPlan(q("8"), q("32Gi"), q("1"), q("6Gi")); !p.Parallel {
+		t.Fatalf("roomy node should build in parallel: %s", p.Reason)
+	}
+	if p := decideBuildPlan(q("2"), q("8Gi"), q("500m"), q("3Gi")); p.Parallel {
+		t.Fatalf("small node must build sequentially: %s", p.Reason)
+	}
+	if p := decideBuildPlan(q("16"), q("12Gi"), q("1"), q("4Gi")); p.Parallel {
+		t.Fatal("memory short by headroom must stay sequential")
+	}
+	if p := decideBuildPlan(q("3"), q("64Gi"), q("0"), q("0")); p.Parallel {
+		t.Fatal("CPU short must stay sequential")
+	}
+}
+
+func planCluster(cpu, mem string, podRequests ...[2]string) *Cluster {
+	k := fakeCluster()
+	node := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Node", "metadata": map[string]any{"name": "n1"},
+		"status": map[string]any{"allocatable": map[string]any{"cpu": cpu, "memory": mem}}}}
+	objs := []runtime.Object{node}
+	for i, r := range podRequests {
+		objs = append(objs, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Pod",
+			"metadata": map[string]any{"name": fmt.Sprintf("p%d", i), "namespace": "x"},
+			"spec":     map[string]any{"containers": []any{map[string]any{"resources": map[string]any{"requests": map[string]any{"cpu": r[0], "memory": r[1]}}}}},
+			"status":   map[string]any{"phase": "Running"}}})
+	}
+	k.client = fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		gvr("", "v1", "nodes"): "NodeList", pods: "PodList"}, objs...)
+	return k
+}
+
+func TestBuildPlanReadsNodeAndPodRequests(t *testing.T) {
+	ctx := context.Background()
+	if p := planCluster("8", "32Gi", [2]string{"1", "4Gi"}, [2]string{"500m", "2Gi"}).buildPlan(ctx); !p.Parallel {
+		t.Fatalf("expected parallel: %s", p.Reason)
+	}
+	if p := planCluster("8", "16Gi", [2]string{"1", "4Gi"}, [2]string{"500m", "2Gi"}).buildPlan(ctx); p.Parallel {
+		t.Fatalf("pods' requests must reduce what is free: %s", p.Reason)
+	}
+	if p := planCluster("not-a-quantity", "16Gi").buildPlan(ctx); p.Parallel {
+		t.Fatal("unreadable capacity must fall back to sequential")
+	}
+}
+
+func TestReconcileRefusesUnsafeStates(t *testing.T) {
+	a := testApp(t)
+	id, _ := a.begin("reconcile", "t")
+	req := operationRequest{Kind: "reconcile"}
+	a.kube = jobCluster()
+	if err := a.reconcile(context.Background(), id, req, defaultSettings()); err == nil || !strings.Contains(err.Error(), "nothing to reconcile") {
+		t.Fatalf("missing job: %v", err)
+	}
+	a.kube = jobCluster(initJob("img@sha256:aa", false))
+	if err := a.reconcile(context.Background(), id, req, defaultSettings()); err == nil || !strings.Contains(err.Error(), "not completed") {
+		t.Fatalf("running job: %v", err)
+	}
+	a.kube = jobCluster(initJob("img@sha256:aa", true))
+	if err := a.reconcile(context.Background(), id, req, defaultSettings()); err == nil || !strings.Contains(err.Error(), "matches no pending release") {
+		t.Fatalf("unmatched image: %v", err)
+	}
+	if _, err := a.db.Exec("INSERT INTO releases(id,backend_commit,frontend_commit,backend_image,frontend_image,status,created) VALUES('r1','b','f','img@sha256:aa','fe','built',?)", now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reconcile(context.Background(), id, operationRequest{Kind: "reconcile", ReleaseID: "other"}, defaultSettings()); err == nil || !strings.Contains(err.Error(), "belongs to release r1") {
+		t.Fatalf("wrong release: %v", err)
+	}
+	var status string
+	_ = a.db.QueryRow("SELECT status FROM releases WHERE id='r1'").Scan(&status)
+	if status != "built" {
+		t.Fatalf("a refused reconcile must not change the release, got %q", status)
+	}
+}
+
+func jobCluster(objects ...runtime.Object) *Cluster {
+	k := fakeCluster()
+	k.client = fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{jobs: "JobList", pods: "PodList"}, objects...)
+	return k
+}
+
+func initJob(image string, complete bool) *unstructured.Unstructured {
+	o := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "batch/v1", "kind": "Job",
+		"metadata": map[string]any{"name": "care-initialize", "namespace": namespace},
+		"spec":     map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"image": image}}}}}}}
+	if complete {
+		o.Object["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Complete", "status": "True"}}}
+	}
+	return o
 }

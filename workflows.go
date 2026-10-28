@@ -54,7 +54,7 @@ func (a *App) startOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Kind {
-	case "preflight", "prepare", "build", "install", "restart", "stop", "start", "snapshot", "snapshot-delete":
+	case "preflight", "prepare", "build", "install", "restart", "stop", "start", "snapshot", "snapshot-delete", "reconcile":
 	default:
 		fail(w, 400, "unsupported operation; upgrades and restore are not enabled in this POC")
 		return
@@ -125,6 +125,8 @@ func (a *App) runOperation(id string, req operationRequest, s Settings) {
 		err = a.build(ctx, id, s)
 	case "install":
 		err = a.install(ctx, id, req, s)
+	case "reconcile":
+		err = a.reconcile(ctx, id, req, s)
 	case "restart", "stop", "start":
 		err = a.control(ctx, id, req.Kind)
 	case "snapshot":
@@ -360,35 +362,77 @@ func (a *App) build(ctx context.Context, id string, s Settings) error {
 			_, _ = a.db.Exec("UPDATE releases SET status='build-incomplete' WHERE id=?", id)
 		}
 	}()
-	for _, part := range []struct{ name, commit string }{{"backend", be}, {"frontend", fe}} {
-		if err = a.stage(id, "Building "+part.name+" at "+part.commit[:12]); err != nil {
+	parts := []struct{ name, commit string }{{"backend", be}, {"frontend", fe}}
+	plan := a.kube.buildPlan(ctx)
+	if plan.Parallel {
+		if err = a.stage(id, "Building backend and frontend in parallel ("+plan.Reason+")"); err != nil {
 			return err
 		}
-		job, err := buildManifest(id, part.name, part.commit)
-		if err != nil {
+		if err = a.buildParallel(ctx, id, s, parts[0].commit, parts[1].commit); err != nil {
 			return err
 		}
-		if err = a.kube.apply(ctx, job); err != nil {
-			return err
-		}
-		if err = a.kube.wait(ctx, jobs, namespace, job.GetName(), jobComplete); err != nil {
-			return err
-		}
-		digest, err := a.buildDigest(ctx, job.GetName())
-		if err != nil {
-			return err
-		}
-		column := "backend_image"
-		if part.name == "frontend" {
-			column = "frontend_image"
-		}
-		if _, err = a.db.Exec("UPDATE releases SET "+column+"=? WHERE id=?", s.Registry+"/care-"+part.name+"@"+digest, id); err != nil {
-			return err
+	} else {
+		for _, part := range parts {
+			if err = a.stage(id, "Building "+part.name+" at "+part.commit[:12]+" ("+plan.Reason+")"); err != nil {
+				return err
+			}
+			if err = a.buildPart(ctx, id, s, part.name, part.commit); err != nil {
+				return err
+			}
 		}
 	}
 	_, err = a.db.Exec("UPDATE releases SET status='built' WHERE id=?", id)
 	success = err == nil
 	return err
+}
+
+// buildPart runs one BuildKit Job to completion and records its image digest.
+func (a *App) buildPart(ctx context.Context, id string, s Settings, name, commit string) error {
+	job, err := buildManifest(id, name, commit)
+	if err != nil {
+		return err
+	}
+	if err = a.kube.apply(ctx, job); err != nil {
+		return err
+	}
+	if err = a.kube.wait(ctx, jobs, namespace, job.GetName(), jobComplete); err != nil {
+		return err
+	}
+	digest, err := a.buildDigest(ctx, job.GetName())
+	if err != nil {
+		return err
+	}
+	column := "backend_image"
+	if name == "frontend" {
+		column = "frontend_image"
+	}
+	_, err = a.db.Exec("UPDATE releases SET "+column+"=? WHERE id=?", s.Registry+"/care-"+name+"@"+digest, id)
+	return err
+}
+
+// buildParallel builds both images at once. The first failure stops waiting for
+// the other; its Job is left in the cluster for inspection and is never retried.
+func (a *App) buildParallel(ctx context.Context, id string, s Settings, be, fe string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make(chan error, 2)
+	for name, commit := range map[string]string{"backend": be, "frontend": fe} {
+		go func() {
+			err := a.buildPart(ctx, id, s, name, commit)
+			if err != nil {
+				err = fmt.Errorf("%s build: %w", name, err)
+			}
+			errs <- err
+		}()
+	}
+	var first error
+	for range 2 {
+		if err := <-errs; err != nil && first == nil {
+			first = err
+			cancel()
+		}
+	}
+	return first
 }
 
 func (a *App) buildDigest(ctx context.Context, name string) (string, error) {
@@ -528,6 +572,17 @@ func (a *App) install(ctx context.Context, id string, req operationRequest, s Se
 	if err = a.kube.client.Resource(secrets).Namespace(namespace).Delete(ctx, "care-initial-admin", metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return errors.New("initialization succeeded but failed to remove temporary administrator secret")
 	}
+	if err = a.startCare(ctx, id, be, fe, s); err != nil {
+		return err
+	}
+	_, err = a.db.Exec("UPDATE releases SET status='installed' WHERE id=?", req.ReleaseID)
+	return err
+}
+
+// startCare applies the CARE workloads and publication and waits for them. It runs
+// after initialization has succeeded and is safe to repeat: it never touches the
+// migration Job or the database.
+func (a *App) startCare(ctx context.Context, id, be, fe string, s Settings) (err error) {
 	if err = a.stage(id, "Starting CARE workloads"); err != nil {
 		return err
 	}
@@ -557,7 +612,56 @@ func (a *App) install(ctx context.Context, id string, req operationRequest, s Se
 			return err
 		}
 	}
-	_, err = a.db.Exec("UPDATE releases SET status='installed' WHERE id=?", req.ReleaseID)
+	return nil
+}
+
+// reconcile adopts an installation whose initialization already succeeded but whose
+// release record was left at built/installing/install-uncertain (for example CNCM was
+// restarted mid-install). It never reruns the migration Job: it requires that Job to
+// have completed, matches it to a release by its backend image, then finishes the safe
+// tail (workloads, publication, readiness) and marks the release installed.
+func (a *App) reconcile(ctx context.Context, id string, req operationRequest, s Settings) error {
+	if err := a.stage(id, "Inspecting the existing CARE initialization"); err != nil {
+		return err
+	}
+	job, err := a.kube.client.Resource(jobs).Namespace(namespace).Get(ctx, "care-initialize", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return errors.New("no CARE initialization Job exists; there is nothing to reconcile. Use Install instead")
+	}
+	if err != nil {
+		return err
+	}
+	if done, _ := jobComplete(job); !done {
+		return errors.New("the initialization Job has not completed; inspect it in Kite. It is never rerun automatically")
+	}
+	containers, _, _ := unstructured.NestedSlice(job.Object, "spec", "template", "spec", "containers")
+	image := ""
+	if len(containers) > 0 {
+		image, _, _ = unstructured.NestedString(containers[0].(map[string]any), "image")
+	}
+	var relID, be, fe string
+	err = a.db.QueryRow("SELECT id,backend_image,frontend_image FROM releases WHERE backend_image=? AND status IN ('built','installing','install-uncertain') ORDER BY rowid DESC LIMIT 1", image).Scan(&relID, &be, &fe)
+	if err != nil {
+		return errors.New("the completed initialization used an image that matches no pending release")
+	}
+	if req.ReleaseID != "" && req.ReleaseID != relID {
+		return errors.New("the initialization belongs to release " + relID + ", not the selected release")
+	}
+	if _, err = a.db.Exec("UPDATE releases SET status='installing' WHERE id=?", relID); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_, _ = a.db.Exec("UPDATE releases SET status='install-uncertain' WHERE id=?", relID)
+		}
+	}()
+	if e := a.kube.client.Resource(secrets).Namespace(namespace).Delete(ctx, "care-initial-admin", metav1.DeleteOptions{}); e != nil && !apierrors.IsNotFound(e) {
+		return errors.New("cannot remove the temporary administrator secret")
+	}
+	if err = a.startCare(ctx, id, be, fe, s); err != nil {
+		return err
+	}
+	_, err = a.db.Exec("UPDATE releases SET status='installed' WHERE id=?", relID)
 	return err
 }
 

@@ -32,9 +32,12 @@ images at `ghcr.io/tellmey18/cncm:edge` and `sha-<full-commit>` after checks pas
 - Preflight for exactly one Ready amd64/arm64 node and a default StorageClass.
 - Infrastructure preparation: checksum-verified CNPG 1.30.1 installation,
   PostgreSQL, Silo, Redis, and a persistent Distribution registry.
-- Sequential on-demand BuildKit Jobs for `ohcnetwork/care` and
-  `ohcnetwork/care_fe`, **develop branches only**. Commits are resolved first;
-  image digests are collected from build results.
+- On-demand BuildKit Jobs for `ohcnetwork/care` and `ohcnetwork/care_fe`, **develop
+  branches only**. Commits are resolved first; image digests are collected from build
+  results. Backend and frontend build **in parallel** when the node's allocatable CPU and
+  memory minus what pods already request can give each build its full limit (2 CPUs,
+  5 GiB, plus 1 GiB headroom); otherwise they run one after the other. The chosen mode
+  and the numbers are shown in the build's activity stage.
 - Initial CARE deployment: persistent credentials/JWKS, explicit initialization
   Job, initial administrator, API/worker/beat/frontend, and a same-origin Caddy
   proxy. Beat startup does not rerun migrations.
@@ -190,8 +193,9 @@ work before broader exposure.
 - CNCM needs administrative access to install operators, RBAC and workloads.
 - BuildKit Jobs are privileged but have no service-account token. The approved
   sources still execute upstream build code. This is a single-owner test appliance.
-- Builds are sequential; each has a 5 GiB memory / 2 CPU limit and a two-hour
-  deadline. Package/base-image downloads require internet.
+- Each build has a 5 GiB memory / 2 CPU limit and a two-hour deadline; parallel builds
+  need about twice that free on the node. If one build fails, CNCM stops waiting for the
+  other; its Job keeps running for inspection and is never retried. Package/base-image downloads require internet.
 - Requested persistent capacity is about 42 GiB including CNCM state. Actual disk
   use additionally includes runtime images, temporary build layers, and logs.
 - Resource sizing is unmeasured; 4 GiB guest RAM / 16 GiB disk defaults are not a
